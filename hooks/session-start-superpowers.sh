@@ -22,4 +22,14 @@ load karpathy-guidelines-session-start "$HOME/.claude/plugins/marketplaces/karpa
   'The karpathy-guidelines skill is already loaded below, so it does not need invoking.' \
   'the karpathy-guidelines were'
 
+# Prints the installed kits as kit.py list prints them, empty lists included; a session with no block runs kit.py list itself.
+if kits=$(/usr/bin/python3 -I "$HOME/.claude/scripts/kit.py" list 2>/dev/null); then
+  echo '<kits-session-start>'
+  echo 'The kits installed on this machine, as `kit.py list` prints them. The **Kits** bullet of the agentic workflow says when to offer one.'
+  printf '%s\n' "$kits"
+  echo '</kits-session-start>'
+else
+  echo 'session-start-superpowers: kit.py list failed, so the kit list was not loaded' >&2
+fi
+
 exit 0

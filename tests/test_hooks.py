@@ -17,6 +17,10 @@ SESSION_START = os.path.join(HOOKS_DIR, 'session-start-superpowers.sh')
 SNIPPET = os.path.join(HERE, 'settings-snippet.json')
 CONTEXT_CAP_HOOK = os.path.join(HOOKS_DIR, 'remind-context-cap.py')
 REPORTER = os.path.join(HERE, '..', 'scripts', 'workflow-report.py')
+KIT_SCRIPT = os.path.join(HERE, '..', 'scripts', 'kit.py')
+STANDIN_KIT = os.path.join(HERE, 'kits', 'standin')
+KIT_TESTS = unittest.skipUnless(os.path.exists(KIT_SCRIPT) and os.path.isdir(STANDIN_KIT),
+                                'kit.py and the stand-in kit are not installed beside the hooks')
 PYTHON = '/usr/bin/python3'
 CLEAN_ENV = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
 
@@ -324,6 +328,28 @@ class SessionStart(unittest.TestCase):
         return subprocess.run(['sh', SESSION_START], input='{"hook_event_name":"SessionStart","source":"startup"}',
                               capture_output=True, text=True, timeout=10, env=dict(CLEAN_ENV, HOME=home))
 
+    def install_kit_script(self, body=None):
+        """Puts kit.py, or a script holding BODY, where the hook looks for it."""
+        os.makedirs(f'{self.home}/.claude/scripts')
+        if body is None:
+            shutil.copy(KIT_SCRIPT, f'{self.home}/.claude/scripts/kit.py')
+        else:
+            with open(f'{self.home}/.claude/scripts/kit.py', 'w') as f:
+                f.write(body)
+
+    def install_kit(self, **changes):
+        """Copies the stand-in kit into the temp home, with CHANGES applied to its manifest."""
+        folder = f'{self.home}/.claude/kits/standin'
+        shutil.copytree(STANDIN_KIT, folder)
+        with open(f'{folder}/kit.json') as f:
+            manifest = dict(json.load(f), **changes)
+        with open(f'{folder}/kit.json', 'w') as f:
+            json.dump(manifest, f)
+
+    def kit_block(self, stdout):
+        """The lines the hook printed between its kit tags."""
+        return stdout.split('<kits-session-start>\n')[1].split('</kits-session-start>')[0].splitlines()
+
     def test_prints_the_skill_through_the_symlink(self):
         self.install_linked_skill('FIXTURE RULE BODY\n')
         p = self.run_hook(self.home)
@@ -351,6 +377,59 @@ class SessionStart(unittest.TestCase):
     def test_guidelines_alone_still_print_when_the_skill_is_missing(self):
         self.install_guidelines('FIXTURE GUIDELINE BODY\n')
         self.assertIn('FIXTURE GUIDELINE BODY', self.run_hook(self.home).stdout)
+
+    @KIT_TESTS
+    def test_prints_the_kit_list_after_the_guidelines(self):
+        self.install_linked_skill('FIXTURE RULE BODY\n')
+        self.install_guidelines('FIXTURE GUIDELINE BODY\n')
+        self.install_kit_script()
+        self.install_kit()
+        p = self.run_hook(self.home)
+        self.assertLess(p.stdout.index('FIXTURE GUIDELINE BODY'), p.stdout.index('<kits-session-start>'))
+        intro, listed = self.kit_block(p.stdout)
+        self.assertIn('kit.py list', intro)
+        with open(f'{STANDIN_KIT}/kit.json') as f:
+            applies_when = json.load(f)['applies_when']
+        self.assertEqual(json.loads(listed), {'status': 'ok', 'refused': [], 'kits': [
+            {'name': 'standin', 'applies_when': applies_when}]})
+
+    @KIT_TESTS
+    def test_no_kit_still_prints_an_empty_list(self):
+        # A session with no block runs kit.py list itself, so an empty list is printed, not left out.
+        self.install_kit_script()
+        p = self.run_hook(self.home)
+        self.assertEqual(json.loads(self.kit_block(p.stdout)[1]), {'status': 'ok', 'kits': [], 'refused': []})
+        self.assertNotIn('kit.py', p.stderr)
+
+    @KIT_TESTS
+    def test_a_refused_kit_reaches_the_block(self):
+        self.install_kit_script()
+        self.install_kit(format=2)
+        listed = json.loads(self.kit_block(self.run_hook(self.home).stdout)[1])
+        self.assertEqual((listed['kits'], listed['refused'][0]['name']), ([], 'standin'))
+
+    @KIT_TESTS
+    def test_a_kit_sentence_with_quotes_and_backslashes_is_printed_unchanged(self):
+        sentence = 'Say "hi"\n then C:\\temp'
+        self.install_kit_script()
+        self.install_kit(applies_when=sentence)
+        listed = json.loads(self.kit_block(self.run_hook(self.home).stdout)[1])
+        self.assertEqual(listed['kits'][0]['applies_when'], sentence)
+
+    def check_no_kit_block_and_the_skill_still_prints(self):
+        self.install_linked_skill('FIXTURE RULE BODY\n')
+        p = self.run_hook(self.home)
+        self.assertEqual(p.returncode, 0)
+        self.assertIn('FIXTURE RULE BODY', p.stdout)
+        self.assertNotIn('kits-session-start', p.stdout)
+        self.assertIn('kit.py', p.stderr)
+
+    def test_a_missing_kit_script_is_noted_and_the_skill_still_prints(self):
+        self.check_no_kit_block_and_the_skill_still_prints()
+
+    def test_a_failing_kit_script_is_noted_and_the_skill_still_prints(self):
+        self.install_kit_script('import sys\nsys.exit(1)\n')
+        self.check_no_kit_block_and_the_skill_still_prints()
 
     # CI machines have no real ~/.claude; everywhere else a missing file must fail, not skip.
     @unittest.skipIf(os.environ.get('CI') == 'true', 'reads the real ~/.claude, which CI does not have')

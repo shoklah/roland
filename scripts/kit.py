@@ -7,10 +7,15 @@ show: read <kits>/<name>/kit.json and print {"status": "ok", "format", "name", "
       out; {kit} in a check's command becomes folder. A check or binding carrying "stack" is listed only when --stack
       names that stack.
 
-Prints one JSON object. Exit codes: done 0, a kit that is missing or malformed 1 ({"status": "refused", "reason"}),
+list: print {"status": "ok", "kits": [{"name", "applies_when"}], "refused": [{"name", "reason"}]}, both sorted by
+      name: every folder or link under <kits> not starting with "." that show accepts, and show's reason for each
+      other. A missing <kits> lists nothing; a <kits> that is not a folder is refused.
+
+Prints one JSON object. Exit codes: done 0, a kit that is missing or malformed, or a <kits> that is not a folder, 1 ({"status": "refused", "reason"}),
 usage error 2 (on stderr, nothing on stdout). The lookup reads only; it never runs a check.
 
 Usage: kit.py show NAME [--stack STACK] [--kits DIR]
+       kit.py list [--kits DIR]
 """
 import argparse
 import json
@@ -27,12 +32,14 @@ class Refused(Exception):
 def parse_args(argv):
     parser = argparse.ArgumentParser(prog='kit.py', description='Find a kit by name and print its manifest.')
     subs = parser.add_subparsers(dest='command', required=True)
-    text = "print a kit's manifest with full paths"
-    sub = subs.add_parser('show', help=text, description=text)
-    sub.add_argument('name', help='the kit, a folder under --kits')
-    sub.add_argument('--stack', help="also list the kit's entries for this stack")
-    sub.add_argument('--kits', default=os.path.expanduser('~/.claude/kits'),
-                     help='the folder holding the kits (default: ~/.claude/kits)')
+    for name, text in (('show', "print a kit's manifest with full paths"),
+                       ('list', 'list every kit with its applies_when, and each kit show would refuse')):
+        sub = subs.add_parser(name, help=text, description=text)
+        if name == 'show':
+            sub.add_argument('name', help='the kit, a folder under --kits')
+            sub.add_argument('--stack', help="also list the kit's entries for this stack")
+        sub.add_argument('--kits', default=os.path.expanduser('~/.claude/kits'),
+                         help='the folder holding the kits (default: ~/.claude/kits)')
     return parser.parse_args(argv)
 
 
@@ -55,21 +62,21 @@ def entries(manifest, key, required):
     return items
 
 
-def show(opts):
-    folder = os.path.join(opts.kits, opts.name)
+def show(kits, name, stack=None):
+    folder = os.path.join(kits, name)
     if not os.path.isdir(folder):
-        raise Refused('no kit named %s in %s' % (opts.name, opts.kits))
+        raise Refused('no kit named %s in %s' % (name, kits))
     try:
         with open(os.path.join(folder, 'kit.json')) as f:
             manifest = json.load(f)
     except (OSError, ValueError) as e:
-        raise Refused('could not read %s/kit.json: %s' % (opts.name, e))
+        raise Refused('could not read %s/kit.json: %s' % (name, e))
     if not isinstance(manifest, dict):
-        raise Refused('kit.json of %s is not a JSON object' % opts.name)
+        raise Refused('kit.json of %s is not a JSON object' % name)
     if manifest.get('format') != FORMAT:
         raise Refused('kit.json has format %r, and this lookup reads format %d' % (manifest.get('format'), FORMAT))
-    if manifest.get('name') != opts.name:
-        raise Refused('kit.json has name %r, not its folder name %s' % (manifest.get('name'), opts.name))
+    if manifest.get('name') != name:
+        raise Refused('kit.json has name %r, not its folder name %s' % (manifest.get('name'), name))
     for key in ('version', 'applies_when'):
         if not isinstance(manifest.get(key), str) or not manifest[key]:
             raise Refused('kit.json has no %s' % key)
@@ -84,9 +91,9 @@ def show(opts):
     reads = [kit_file(folder, b['read'], 'bindings') for b in bindings]
 
     def listed(entry):
-        return 'stack' not in entry or entry['stack'] == opts.stack
+        return 'stack' not in entry or entry['stack'] == stack
 
-    return {'status': 'ok', 'format': FORMAT, 'name': opts.name, 'version': manifest['version'], 'folder': folder,
+    return {'status': 'ok', 'format': FORMAT, 'name': name, 'version': manifest['version'], 'folder': folder,
             'applies_when': manifest['applies_when'], **files,
             'checks': [{'name': c.get('name'), 'command': c['command'].replace('{kit}', folder)}
                        for c in checks if listed(c)],
@@ -94,10 +101,31 @@ def show(opts):
             'stacks': stacks}
 
 
+def list_kits(kits):
+    if not os.path.lexists(kits):
+        names = []
+    elif not os.path.isdir(kits):
+        raise Refused('%s is not a folder' % kits)
+    else:
+        try:
+            entries = os.listdir(kits)
+        except OSError as e:
+            raise Refused('could not read %s: %s' % (kits, e))
+        names = sorted(n for n in entries if not n.startswith('.')
+                       and (os.path.isdir(os.path.join(kits, n)) or os.path.islink(os.path.join(kits, n))))
+    listed, refused = [], []
+    for name in names:
+        try:
+            listed.append({'name': name, 'applies_when': show(kits, name)['applies_when']})
+        except Refused as e:
+            refused.append({'name': name, 'reason': str(e)})
+    return {'status': 'ok', 'kits': listed, 'refused': refused}
+
+
 def main(argv):
     opts = parse_args(argv)
     try:
-        result = show(opts)
+        result = show(opts.kits, opts.name, opts.stack) if opts.command == 'show' else list_kits(opts.kits)
     except Refused as e:
         print(json.dumps({'status': 'refused', 'reason': str(e)}))
         return 1

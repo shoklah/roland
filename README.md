@@ -112,7 +112,7 @@ Results: `passed` exits 0, `failed` and `no_tests` exit 1, `couldnt_run` exits 3
 
 ### Kits
 
-A kit specializes the workflow for one topic, only on the tasks it fits: it adds design points, guidance for implementers, automated checks and a `kit-reviewer` pass, and never changes the path, the models, the caps or the order of steps. Kits come from a separate kits repo and live in `~/.claude/kits/<name>/`; a project names the ones it uses under `## Kits` in its `CLAUDE.md`, and `scripts/kit.py show <name>` finds one by name. The rules are in `claude-md/kits.md`. Each kit's `kit.json` holds:
+A kit specializes the workflow for one topic, only on the tasks it fits: it adds design points, guidance for implementers, automated checks and a `kit-reviewer` pass, and never changes the path, the models, the caps or the order of steps. Kits come from a separate kits repo and live in `~/.claude/kits/<name>/`; a project names the ones it uses under `## Kits` in its `CLAUDE.md`, and `scripts/kit.py show <name>` finds one by name and `scripts/kit.py list` lists them all. The startup hook puts that list in every session, so on a Small or Full request that fits a kit the project neither names nor declines, the session offers it. The rules are in `claude-md/kits.md`. Each kit's `kit.json` holds:
 
 - `format`, `name`, `version`: the manifest's format, the kit's folder name and its version, which the run record keeps.
 - `applies_when`: one sentence naming the tasks the kit fits.
@@ -176,7 +176,7 @@ flowchart LR
     subgraph CFG ["Configuration: checked by the harness"]
         AG["Ten custom agents<br/>model, effort, disallowedTools,<br/>preloaded skills"]
         DH["Dispatch hook<br/>refuses model-less general-purpose,<br/>refuses final-reviewer before simplify,<br/>refuses plan-reviewer before plan-simplifier"]
-        SH["Startup hook<br/>loads using-superpowers +<br/>karpathy-guidelines"]
+        SH["Startup hook<br/>loads using-superpowers,<br/>karpathy-guidelines and the kit list"]
         CH["Context cap hook<br/>holds a turn ending past 300K<br/>with no handoff offer"]
     end
     subgraph INS ["Instructions: followed, not checked"]
@@ -190,7 +190,7 @@ flowchart LR
 |---|---|---|
 | Custom agents | `agents/*.md` | Ten agents with model and effort pinned in frontmatter. Implementers can't spawn agents; reviewers can't edit files and never consult the advisor. `sweeper`, on Haiku, is read-only the same way: it takes a lookup of five or more reads off the main session and reports only the conclusion, under 300 words, each fact with where it was read and what it couldn't verify marked, with no count line. Reviewers give each finding a category from their area's list and end with a guarded `Strengths:` section. Task and final reviewers end with a fixed `Findings: critical=N important=N minor=N [unneeded=N] strengths=N` line, `fix-checker` with `Verdicts: fixed=N not_proportionate=N open=N`, `plan-simplifier` with `Findings: cuts=N flags=N strengths=N` and `plan-reviewer` with `Findings: findings=N strengths=N`. |
 | Dispatch hook | `hooks/guard-agent-dispatch.py` | PreToolUse on `Agent`. Denies a dispatch with no `model` when the type is missing or `general-purpose`, which would otherwise run silently on the main session's model. Denies a final review, `final-reviewer` or a `general-purpose` one matched by description, until the transcript shows `simplify` since the previous launched final review. Denies a plan review, `plan-reviewer` or a `general-purpose` one matched by description, until the transcript shows a launched plan simplify since the previous launched plan review. Silent on everything else, never answers `allow`, fails open. |
-| Startup hook | `hooks/session-start-superpowers.sh` | On `startup`, `clear` and `compact`, prints `using-superpowers` and `karpathy-guidelines`. A missing file is noted on stderr; the rest still loads. Combined output stays under the 10,000-character cap. |
+| Startup hook | `hooks/session-start-superpowers.sh` | On `startup`, `clear` and `compact`, prints `using-superpowers`, `karpathy-guidelines` and the installed kits as `kit.py list` prints them. A missing file or a failing list is noted on stderr; the rest still loads. Combined output stays under the 10,000-character cap. |
 | Commit guard | `hooks/guard-main-commit.py` | Optional. Answers `ask` for a commit landing on `main` or `master`, `deny` in bypass mode. |
 | Context cap hook | `hooks/remind-context-cap.py` | `Stop`. Holds a turn that would end past the 300K context cap with no handoff offer made, once per turn end, and tells the session to offer the handoff with a `Hand off` button; from 450K it names compaction and a `Compact` button too. After an offer, the next hold waits until context has grown a further 50K; a compaction puts it back to the cap. If the hook fails or can't read the transcript, the turn ends. |
 | `CLAUDE.md` section | `claude-md/agentic-workflow.md` | The rules above in 30 lines, installed between `<!-- agentic-workflow:start -->` and `<!-- agentic-workflow:end -->`. |
@@ -236,6 +236,7 @@ A skill or command the owner triggers is offered at a fixed moment, or never. Th
 | `grill-me` | On every Full design, once, right before the owner approves it. |
 | `handoff` | At the cap, at a stopping point, drafted so a yes costs only the switch. After a skip, it comes back once context has grown a further 50K. |
 | Archiving the session | Last, once nothing the owner asked of the session is left open. Never at a handoff, since the successor shares the worktree: the last session of the chain makes the offer and names the earlier ones, left for the owner to archive. An app action, not a skill: on yes the session archives itself. |
+| A kit | On a Small or Full request that fits a kit the startup hook lists and the project neither names nor declines. Three answers, not yes/skip: `Use it`, `Not now` and `Never here`, as `claude-md/kits.md` says under **Suggest**. |
 | `workflow-dashboard` | Never offered: the owner runs `/workflow-dashboard` when they want the page, and its link stays the same, so nothing is lost by waiting. |
 
 ## Layout

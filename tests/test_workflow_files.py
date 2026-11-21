@@ -225,7 +225,8 @@ class AgentFiles(unittest.TestCase):
 
     def test_section_points_to_the_kits_rules(self):
         text = read('claude-md/agentic-workflow.md')
-        for must in ('**Kits:**', '## Kits', '**Kit:**', '~/.claude/docs/kits.md'):
+        for must in ('**Kits:**', '## Kits', '**Kit:**', '~/.claude/docs/kits.md',
+                     'session-start hook', 'kit.py list', 'neither names nor declines', 'the list names a refused kit'):
             self.assertIn(must, text)
         self.assertLessEqual(len(text.splitlines()), 30)
 
@@ -233,12 +234,15 @@ class AgentFiles(unittest.TestCase):
         text = read('claude-md/kits.md')
         for must in ('kit.py show', 'applies_when', '**Kit:** exempt:', '; tags:', 'kit-reviewer', 'task-reviewer',
                      'final-reviewer', 'starts with `Re-check`', 'not verified', 'never stops a run', 'start no server',
-                     'kits', 'kit_checks', 'kit_review', 'fix_check', 'workflow-archive', 'offer no pull request'):
+                     'kits', 'kit_checks', 'kit_review', 'fix_check', 'workflow-archive', 'offer no pull request',
+                     'kit.py list', '**Suggest:**', '`Use it`', '`Not now`', '`Never here`', '- <name>: declined',
+                     'Kit offer: <name> | <answer>', '"skill": "kit:<name>"', 'makes no offer', 'names no kit',
+                     'the list names a refused kit'):
             self.assertIn(must, text)
 
     def test_plan_reviewer_checks_kit_tasks_both_ways(self):
         _, body = frontmatter(read('agents/plan-reviewer.md'))
-        for must in ('## Kits', 'kit.py show', 'applies_when', '**Kit:** exempt:', 'unmarked'):
+        for must in ('## Kits', 'kit.py show', 'applies_when', '**Kit:** exempt:', 'unmarked', 'declined'):
             self.assertIn(must, body)
 
     def test_section_holds_the_rules_and_monitoring_contract(self):

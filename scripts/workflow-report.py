@@ -308,7 +308,8 @@ CHANGES = (('2026-11-09', 'Parallel waves', 'claude-workflow#3'),
            ('2026-11-17', "The dispatch hook refuses a pair's second half again", 'claude-workflow#50'),
            ('2026-11-17', 'Sessions offer to archive themselves once their work is done', 'claude-workflow#50'),
            ('2026-11-17', 'Fable stages by pace; the all-model limit gets the same pace rule', 'claude-workflow#57'),
-           ('2026-11-17', 'Goals and one change per session', 'claude-workflow#58'))
+           ('2026-11-17', 'Goals and one change per session', 'claude-workflow#58'),
+           ('2026-11-21', 'Sessions offer a kit that fits, in any project; the startup hook lists the kits', 'claude-workflow#61'))
 CHANGE_DAYS = {ref: day for day, _, ref in CHANGES}
 # Seats that moved, by agent: (the last UTC day of the old pin, its model, its effort). A dispatch on or before that
 # day passes on the old pin too, since the check reads today's pins. A row is never removed.

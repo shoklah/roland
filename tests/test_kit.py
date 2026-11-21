@@ -110,8 +110,85 @@ class Kit(unittest.TestCase):
                 self.assertEqual(out['status'], 'refused')
                 self.assertIn(word, out['reason'])
 
+    STANDIN_ENTRY = {'name': 'standin', 'applies_when': "The task changes the stand-in's sample file."}
+
+    def add_kit(self, name, **changes):
+        """Copies the stand-in as kit NAME, its manifest's name set and CHANGES applied."""
+        folder = os.path.join(self.kits, name)
+        shutil.copytree(STANDIN, folder)
+        with open(os.path.join(folder, 'kit.json'), 'w') as f:
+            json.dump(self.manifest(name=name, **changes), f)
+
+    def list_kits(self, kits=None):
+        rc, stdout, stderr = self.run_script('list', '--kits', kits or self.kits)
+        self.assertEqual((rc, stderr), (0, ''), stdout)
+        return json.loads(stdout)
+
+    def test_list_prints_every_kit_sorted_by_name(self):
+        self.add_kit('alpha', applies_when='Alpha work.')
+        self.assertEqual(self.list_kits(), {'status': 'ok', 'refused': [], 'kits': [
+            {'name': 'alpha', 'applies_when': 'Alpha work.'}, self.STANDIN_ENTRY]})
+
+    def test_list_names_a_kit_show_would_refuse_and_still_lists_the_rest(self):
+        self.add_kit('broken', format=2)
+        os.makedirs(os.path.join(self.kits, 'empty'))
+        out = self.list_kits()
+        self.assertEqual(out['kits'], [self.STANDIN_ENTRY])
+        self.assertEqual([r['name'] for r in out['refused']], ['broken', 'empty'])
+        self.assertIn('format', out['refused'][0]['reason'])
+        self.assertIn('kit.json', out['refused'][1]['reason'])
+
+    def test_list_of_a_missing_or_empty_kits_folder_is_empty(self):
+        empty = os.path.join(self.root, 'empty')
+        os.makedirs(empty)
+        for kits in (os.path.join(self.root, 'nowhere'), empty):
+            with self.subTest(kits):
+                self.assertEqual(self.list_kits(kits), {'status': 'ok', 'kits': [], 'refused': []})
+
+    def test_list_skips_hidden_folders_and_plain_files(self):
+        os.makedirs(os.path.join(self.kits, '.git'))
+        with open(os.path.join(self.kits, 'README.md'), 'w') as f:
+            f.write('not a kit')
+        self.assertEqual(self.list_kits(), {'status': 'ok', 'kits': [self.STANDIN_ENTRY], 'refused': []})
+
+    def test_list_follows_a_linked_kit_folder(self):
+        # The real install: ~/.claude/kits/<name> links to the kits repo.
+        os.rename(os.path.join(self.kits, 'standin'), os.path.join(self.root, 'elsewhere'))
+        os.symlink(os.path.join(self.root, 'elsewhere'), os.path.join(self.kits, 'standin'))
+        self.assertEqual(self.list_kits()['kits'], [self.STANDIN_ENTRY])
+
+    def test_list_refuses_a_link_that_leads_nowhere(self):
+        # The kits repo moved: the kit must be named as refused, not dropped.
+        os.symlink(os.path.join(self.root, 'gone'), os.path.join(self.kits, 'lost'))
+        out = self.list_kits()
+        self.assertEqual(out['kits'], [self.STANDIN_ENTRY])
+        self.assertEqual([r['name'] for r in out['refused']], ['lost'])
+
+    def test_list_refuses_a_kits_path_that_is_not_a_folder(self):
+        path = os.path.join(self.root, 'file')
+        with open(path, 'w') as f:
+            f.write('x')
+        rc, stdout, stderr = self.run_script('list', '--kits', path)
+        self.assertEqual((rc, stderr), (1, ''))
+        self.assertEqual(json.loads(stdout)['status'], 'refused')
+
+    @unittest.skipIf(os.geteuid() == 0, 'root reads any folder')
+    def test_list_refuses_a_kits_folder_it_cannot_read(self):
+        path = os.path.join(self.root, 'locked')
+        os.mkdir(path)
+        os.chmod(path, 0)
+        try:
+            rc, stdout, stderr = self.run_script('list', '--kits', path)
+        finally:
+            os.chmod(path, 0o755)
+        self.assertEqual((rc, stderr), (1, ''))
+        out = json.loads(stdout)
+        self.assertEqual(out['status'], 'refused')
+        self.assertIn('could not read %s' % path, out['reason'])
+
     def test_usage_errors_exit_2_with_nothing_on_stdout(self):
-        for args in [(), ('nonsense',), ('show',), ('show', 'standin', 'extra'), ('show', 'standin', '--stack')]:
+        for args in [(), ('nonsense',), ('show',), ('show', 'standin', 'extra'), ('show', 'standin', '--stack'),
+                     ('list', 'extra'), ('list', '--stack', 'alpha')]:
             with self.subTest(args):
                 rc, stdout, stderr = self.run_script(*args)
                 self.assertEqual((rc, stdout), (2, ''))

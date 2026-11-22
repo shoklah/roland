@@ -142,6 +142,11 @@ def phase_inputs(unit):
     return {p['name']: sum(m['input'] for m in p['models'].values()) for p in unit['phases']}
 
 
+PAIR = {'built': 'xhigh', 'plans': [
+    {'effort': 'medium', 'path': '/a/plan-medium.md', 'agent_id': 'a1', 'lines': 200, 'tasks': 3, 'questions': 0},
+    {'effort': 'xhigh', 'path': '/p/docs/plan.md', 'agent_id': 'a2', 'lines': 320, 'tasks': 3, 'questions': 1}]}
+
+
 class Report(unittest.TestCase):
     def setUp(self):
         self.root = os.path.realpath(tempfile.mkdtemp(prefix='workflow report test '))
@@ -535,14 +540,15 @@ class Report(unittest.TestCase):
         self.assertLessEqual(set(run_record()), set(schema))
         self.assertEqual(sorted(set(schema) - set(run_record())),
                          ['archive', 'categories', 'category_list', 'goal', 'headline', 'kit_checks', 'kits', 'offers',
-                          'plan', 'schema', 'spec', 'started', 'steps', 'waves'])
+                          'plan', 'plan_pair', 'schema', 'spec', 'started', 'steps', 'waves'])
 
     def test_schema_lists_the_schema_2_fields_and_outcomes(self):
         schema = json.loads(self.run_report('--schema'))
         for key in ('schema', 'started', 'plan', 'archive', 'steps'):
             self.assertIn(key, schema)
-        for outcome in ('fixed', 'applied', 'declined', 'deferred', 'ruled', 'open', 'to_owner'):
-            self.assertIn(outcome, schema['steps'])
+        for outcome in ('fixed', 'applied', 'declined', 'deferred', 'ruled', 'open', 'to_owner', 'not_built'):
+            self.assertIn(f'"{outcome}"', schema['steps'])
+        self.assertIn('(schema 9)', schema['plan_pair'])
         # ADDS_UP tallies a final review's findings by severity against its counts, "unneeded" included.
         self.assertIn('"severity": "critical"|"important"|"minor", or "unneeded" for', schema['steps'])
         self.assertIn('"plan"', schema['path'])
@@ -567,7 +573,7 @@ class Report(unittest.TestCase):
     def test_schema_4_steps_carry_the_agent_id(self):
         out = self.run_report('--schema')
         schema = json.loads(out)
-        self.assertEqual(schema['schema'], 'int, record format: 8; a record without it is 1')
+        self.assertEqual(schema['schema'], 'int, record format: 9; a record without it is 1')
         self.assertIn('"agent_id"', schema['steps'])
         self.assertIn('every kind but simplify', schema['steps'])
 
@@ -736,6 +742,22 @@ class Report(unittest.TestCase):
         self.assertNotIn('Consultations with no note', '\n'.join(brief))
         self.assertIn('missing=1', section(self.run_report(), 'Advisor notes:')[0])
 
+    def test_brief_counts_plan_pairs_and_marks_the_checkpoints(self):
+        pair = {'built': 'medium', 'plans': [{'effort': 'medium'}, {'effort': 'xhigh'}]}
+        def pairs_part(n, *args, full=()):
+            self.tearDown()
+            self.setUp()  # a fresh log: records() appends
+            self.records([dict(plan_record(branch=f'b{i}'), schema=9, plan_pair=pair) for i in range(n)] + list(full))
+            return self.run_report('--brief', *args).splitlines()[1].split('; ')[1]
+        self.assertEqual(pairs_part(0), 'paired plans 0/10 by 2026-12-20')
+        for n, mark in ((5, False), (6, True), (7, True), (10, True), (11, True)):
+            self.assertEqual(pairs_part(n).endswith(' CHECKPOINT'), mark, n)
+        self.assertEqual(pairs_part(1, '--now', '2026-12-20T12:00:00Z'), 'paired plans 1/10 by 2026-12-20')
+        self.assertTrue(pairs_part(1, '--now', '2026-12-21T00:00:00Z').endswith(' CHECKPOINT'))
+        # only plan records count: a Full record carrying plan_pair is no paired plan
+        self.assertEqual(pairs_part(1, full=[dict(run_record(branch='f'), schema=9, plan_pair=pair)]),
+                         'paired plans 1/10 by 2026-12-20')
+
     def test_brief_counts_further_warnings(self):
         no = RAN_NO
         self.records([run_record(branch='one', simplify=no), run_record(branch='two', simplify=no),
@@ -822,6 +844,9 @@ class Report(unittest.TestCase):
         # so is the context cap hook's
         self.assertIn({'date': CAP_OFFER_FROM, 'title': 'Context cap hook and the no-offer warning',
                        'ref': 'claude-workflow#34'}, changes)
+        # and the plan pairs measure's
+        self.assertIn({'date': '2026-11-22', 'title': 'Plan pairs: plan writing at medium and xhigh on the same spec',
+                       'ref': 'claude-workflow#62'}, changes)
 
     def test_html_page_is_self_contained_and_escaped(self):
         step = {'step': 'final_review', 'counts': {'critical': 0, 'important': 1, 'minor': 0, 'unneeded': 0},
@@ -1142,6 +1167,38 @@ class Report(unittest.TestCase):
         week = next(w for w in data['totals']['usage'] if w['week'] == '2026-11-08')
         self.assertEqual((week['all']['borrowed_from'], week['all']['chunks'], week['all']['error']),
                          ('2026-11-01', None, None))
+
+    def test_plan_pair_reads_into_the_json_record_and_steps(self):
+        steps = [{'step': 'plan_simplify', 'plan_effort': 'xhigh', 'counts': {'cuts': 1, 'flags': 0}, 'findings': []},
+                 {'step': 'plan_review', 'plan_effort': 'xhigh', 'counts': {'findings': 0}, 'findings': []},
+                 {'step': 'plan_simplify', 'plan_effort': 'medium', 'counts': {'cuts': 2, 'flags': 1}, 'findings': []},
+                 {'step': 'plan_review', 'plan_effort': 'medium', 'counts': {'findings': 1}, 'findings': [
+                     {'id': 'F1', 'severity': 'important', 'summary': 's', 'outcome': 'not_built', 'validity': 'valid'}]}]
+        self.records([dict(plan_record(), schema=9, plan_pair=PAIR, steps=steps)])
+        run = self.json()['runs'][0]
+        self.assertEqual(run['record']['plan_pair'], PAIR)
+        self.assertEqual([s['plan_effort'] for s in run['steps']], ['xhigh', 'xhigh', 'medium', 'medium'])
+        self.assertEqual(run['steps'][3]['findings'][0]['outcome'], 'not_built')
+        self.assertNotIn('plan_pair_incomplete', [w['kind'] for w in run['warnings']])
+
+    def test_plan_pair_of_the_wrong_shape_reads_as_absent_and_warns(self):
+        bad = [{'built': 'high', 'plans': [{'effort': 'medium'}, {'effort': 'xhigh'}]},
+               {'built': 'medium', 'plans': 'x'},
+               {'built': 'medium', 'plans': [{'effort': 'medium'}, 'x']},
+               {'built': 'medium', 'plans': [{'effort': 'medium'}, {'effort': 'medium'}]},
+               {'built': 'medium', 'plans': [{'effort': 'medium'}, {'effort': 'high'}]},
+               {'built': 'medium', 'plans': [{}, {}]}]
+        self.records([dict(plan_record(branch=f'b{i}'), schema=9, plan_pair=p) for i, p in enumerate(bad)]
+                     + [dict(plan_record(branch='s'), schema=9, plan_pair='x')])
+        kinds = [w['kind'] for w in self.json()['totals']['health']['warnings']]
+        self.assertEqual(kinds.count('plan_pair_incomplete'), 6)  # a non-dict plan_pair is absent: no warning
+
+    def test_a_paired_plan_step_without_plan_effort_warns(self):
+        self.records([dict(plan_record(), schema=9, plan_pair=PAIR,
+                           steps=[{'step': 'plan_review', 'counts': {'findings': 0}, 'findings': []}])])
+        texts = [w['text'] for w in self.json()['totals']['health']['warnings'] if w['kind'] == 'plan_pair_incomplete']
+        self.assertEqual(len(texts), 1)
+        self.assertIn('plan_effort on plan_review step 1', texts[0])
 
 
 STARTUP = '<karpathy-guidelines-session-start>guidelines</karpathy-guidelines-session-start>'
@@ -1929,14 +1986,17 @@ class HealthCheck(Report):
 
     def pins(self, skills=False, final='opus', plan=False):
         """A fixture agents folder: final-reviewer pinned final/high, fix-checker sonnet/medium and implementer
-        opus/medium, and plan-reviewer fable/high when plan is true, listing their skills only when skills is true."""
+        opus/medium, and plan-reviewer fable/high and plan-writer fable with no effort, as agents/plan-writer.md pins it,
+        when plan is true, listing their skills only when skills is true."""
         folder = os.path.join(self.root, 'agents')
         os.makedirs(folder, exist_ok=True)
         agents = (('final-reviewer', final, 'high', ['andrej-karpathy-skills:karpathy-guidelines']),
                   ('fix-checker', 'sonnet', 'medium', []),
                   ('implementer', 'opus', 'medium', []))
-        for name, model, effort, listed in agents + ((('plan-reviewer', 'fable', 'high', []),) if plan else ()):
-            lines = ['---', f'name: {name}', 'description: d', f'model: {model}', f'effort: {effort}']
+        planners = (('plan-reviewer', 'fable', 'high', []), ('plan-writer', 'fable', None, []))
+        for name, model, effort, listed in agents + (planners if plan else ()):
+            lines = ['---', f'name: {name}', 'description: d', f'model: {model}']
+            lines += [f'effort: {effort}'] if effort else []
             if skills and listed:
                 lines += ['skills:'] + [f'  - {skill}' for skill in listed]
             with open(os.path.join(folder, name + '.md'), 'w') as f:
@@ -2406,6 +2466,12 @@ class HealthCheck(Report):
             ('2026-11-17', {'stage': '2'}, 'final-reviewer', {}, ('claude-fable-5-2', 'high'),
              []),  # install day: old reading passes
             ('2026-11-20', {'stage': '2'}, 'plan-reviewer', {}, ('claude-fable-5-2', 'high'), ['agent_off_pin']),
+            ('2026-11-20', {'stage': '1'}, 'plan-writer', {'effort': 'medium'}, ('claude-fable-5-2', 'medium'), []),
+            ('2026-11-20', {'stage': '1'}, 'plan-writer', {'effort': 'xhigh'}, ('claude-fable-5-2', 'xhigh'), []),
+            ('2026-11-20', {'stage': '2'}, 'plan-writer', {'effort': 'medium'}, ('claude-fable-5-2', 'medium'),
+             ['agent_off_pin']),  # forgotten override
+            ('2026-11-20', {'stage': '2'}, 'plan-writer', {'model': 'opus', 'effort': 'xhigh'},
+             ('claude-opus-5-5', 'xhigh'), []),
         )
         # A Fable seat pinned by a full model ID is caught as well: the forgotten override, with the pin as an ID.
         cases += (('2026-11-20', {'stage': '2'}, 'final-reviewer', {}, ('claude-fable-5-2', 'high'),
@@ -2421,6 +2487,9 @@ class HealthCheck(Report):
                                  date='2026-11-20T12:00:00Z', **over)
                 args = ('--agents', self.pins(final=(pin or ['fable'])[0], plan=True), '--now', '2026-11-21T12:00:00Z')
                 self.assertEqual([k for k in self.kinds(*args) if k == 'agent_off_pin'], expected)
+                if agent == 'plan-writer' and expected:  # no effort pinned: the pin reads as its model alone
+                    self.assertIn('plan-writer ran on claude-fable-5-2/medium, pinned fable, but stage 2 moves it to '
+                                  'opus: Review', '\n'.join(self.health(*args)))
 
     def test_a_dateless_records_stage_reads_as_either_table(self):
         # No started and no date: the stage may mean the old 2 or the new one, so a Fable seat on its pin passes.
@@ -2565,6 +2634,14 @@ class HealthCheck(Report):
                      project='proj')
         self.records([plan_record(started=started)])
         self.assertEqual(self.health(), ['WARN: b (2026-11-05): required skill writing-plans did not run'])
+
+    def test_a_paired_plan_record_needs_no_writing_plans_of_its_own(self):
+        # its plan-writers load writing-plans, which their pin checks
+        started = '2026-11-05T10:00:00Z'
+        self.session([self.startup(), self.loaded('brainstorming'), self.record_write('', started=started)],
+                     project='proj')
+        self.records([dict(plan_record(started=started), schema=9, plan_pair=PAIR)])
+        self.assertNotIn('required_skill_missing', self.kinds())
 
     def test_an_agent_without_its_pinned_skill_is_warned(self):
         prefix = 'WARN: b (2026-11-05): '
@@ -2773,6 +2850,12 @@ class HealthCheck(Report):
         self.schema2_run([dict(self.KIT_STEP, agent_id='kr'), SIMPLIFY_STEP], dispatched, schema=6, categories=2,
                          kits=self.KITS, kit_checks=self.KIT_CHECKS)
         self.assertEqual(phase_inputs(self.json()['runs'][0])['kit_review'], 30000)
+
+    def test_a_plan_writers_spend_is_plan_writing(self):
+        dispatched = self.reviewed('pw', 'Plan written: /p/plan.md, 3 tasks', u=usage(None, 30000, 0),
+                                   subagent_type='plan-writer', description='Write the plan')
+        self.schema2_run([SIMPLIFY_STEP], dispatched)
+        self.assertEqual(phase_inputs(self.json()['runs'][0])['plan_writing'], 30000)
 
     def kit_kinds(self):
         return [k for k in self.kinds() if k.startswith('kit_')]

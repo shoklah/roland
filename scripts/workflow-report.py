@@ -19,10 +19,10 @@ Usage: workflow-report.py [--since YYYY-MM-DD] [--projects DIR] [--log FILE] [--
   --no-cache  read and write no cache; the output is the same
   --since     ignore transcript rows and run records before this date (UTC); --health and --brief default it to
               7 days before --now, --json and --html read everything
-  --brief     at most 3 lines: this week's advisor share of Fable use, the trial's progress, then this
-              week's first WARN line (the unpriced_model ones come last) with a count of the rest, or else the
-              consultations with no note, then any commits on main since the last template export; the trial counts
-              every run record
+  --brief     at most 3 lines: this week's advisor share of Fable use, the trial's progress and the paired plans'
+              count, then this week's first WARN line (the unpriced_model ones come last) with a count of the rest,
+              or else the consultations with no note, then any commits on main since the last template export; the
+              trial counts every run record
   --health    every WARN line for the runs since --since, from the run log, the runs' transcripts and git, for
               this week's sessions with no run record and no row in the last hour, for this week's plan reviews
               with no plan-simplifier since the previous plan review, for this week's typed triggers whose skill
@@ -34,8 +34,10 @@ Usage: workflow-report.py [--since YYYY-MM-DD] [--projects DIR] [--log FILE] [--
               required offer with no entry, and for schema 4 records each step's agent id against the launched
               dispatches, and for schema 5 records each finding's category and validity, each review step's
               strengths and their number against its report's count line, for schema 8 records a missing
-              headline, goal or (plan and Full) spec, and for a run whose stage was read on or after the stages by
-              pace day it warns on a main session on Fable where its stage calls for Opus (stage_model_differs);
+              headline, goal or (plan and Full) spec, for schema 9 plan records with a plan pair its built level, a
+              plan per level and each plan step's plan_effort (plan_pair_incomplete), and for a run whose stage
+              was read on or after the stages by pace day it warns on a main session on Fable where its stage
+              calls for Opus (stage_model_differs);
               then information lines: the "fixed, not proportionate" counts, archives missing or with another
               Started: time, the runs whose git evidence is unavailable, and over this week's main transcripts the
               inline sweeps and those that went 50 or more calls past the context cap with no handoff
@@ -101,7 +103,8 @@ import subprocess
 import sys
 import tempfile
 
-OUTCOMES = ('fixed', 'applied', 'declined', 'deferred', 'ruled', 'open', 'to_owner')
+OUTCOMES = ('fixed', 'applied', 'declined', 'deferred', 'ruled', 'open', 'to_owner', 'not_built')
+PLAN_LEVELS = ('medium', 'xhigh')
 OFFER_OUTCOMES = ('accepted', 'skipped', 'not_offered', 'updated')
 REQUIRED_OFFERS = ('grill-me',)
 STEP_KINDS = ('plan_simplify', 'plan_review', 'task_review', 'fix_check', 'simplify', 'final_review', 'final_fix_check',
@@ -188,7 +191,7 @@ def category_list():
             'areas': [{'area': area, 'steps': list(kinds), 'list': CATEGORIES[key]} for area, kinds, key in AREAS]}
 
 SCHEMA = {
-    'schema': 'int, record format: 8; a record without it is 1',
+    'schema': 'int, record format: 9; a record without it is 1',
     'date': 'ISO 8601 time the run finished',
     'started': 'ISO 8601 time the session named the run\'s path and stage, in its first message',
     'project': 'absolute path of the project',
@@ -198,6 +201,10 @@ SCHEMA = {
     'path': '"small", "full" or "plan"; a plan record leaves out tasks, fix_rounds, failing_test, fix_growth and '
             'simplify, and base and head are optional on it',
     'plan': 'path of the plan file, on plan records and on runs that build from a plan',
+    'plan_pair': '{"built": "medium"|"xhigh", the plan the run builds, "plans": [{"effort": "medium"|"xhigh", "path", '
+                 '"agent_id": the plan-writer\'s first dispatch, "lines": the plan\'s lines as plan review saw it, '
+                 '"tasks", "questions": the spec-gap questions its writer asked}, one per level]}, on a plan record '
+                 'written under the plan pairs measure; absent otherwise (schema 9)',
     'headline': 'one line saying what the run achieved, written by the finishing session from its ledger (schema 8)',
     'spec': '{"project": absolute path of the spec\'s own project, its main checkout, "path": the spec\'s path under '
             'that project\'s root}, on plan records and Full runs; absent on a Small run with no spec (schema 8)',
@@ -224,7 +231,9 @@ SCHEMA = {
              'fix_check steps, "round": N (0 is the first review, fix-checks are 1 to 3), "agent", "model", "effort" '
              '(as dispatched; agent "simplify" for the skill), "agent_id": the agentId the Agent tool returned for the '
              'step\'s dispatch, which names its subagent transcript (every kind but simplify; schema 4), "kit": the '
-             'kit\'s name, on a kit_review step and on a fix-check that kit-reviewer ran (schema 6), "counts": '
+             'kit\'s name, on a kit_review step and on a fix-check that kit-reviewer ran (schema 6), "plan_effort": '
+             '"medium"|"xhigh", on each plan_simplify and plan_review step of a record carrying plan_pair, the plan it '
+             'checked (schema 9), "counts": '
              '{keys of the step\'s count line: reviews critical, important, minor, plus unneeded for the final review; '
              'plan_simplify cuts, flags; plan_review findings; fix-checks fixed, not_proportionate, open; simplify '
              'applied, skipped; kit_review critical, important, minor}, "findings" (every step but fix-checks): [{"id": "F7", '
@@ -233,7 +242,8 @@ SCHEMA = {
              'severity the reviewer gave, only when a ruling changed it: "severity" is then the ruled one, while '
              '"counts" and "final_findings" stay the report\'s count line (schema 7), "summary", '
              '"outcome": ' + '|'.join(f'"{o}"' for o in OUTCOMES)
-             + ', "reason" (required for declined and ruled), "closed_round": N, "category": an id from its step\'s '
+             + '; "not_built" for a plan review finding on the plan a plan pair did not build (schema 9), '
+             '"reason" (required for declined and ruled), "closed_round": N, "category": an id from its step\'s '
              'area list in "category_list", the reviewer\'s, "validity": "valid"|"invalid"|"unclear", the '
              'session\'s, by the definitions in "category_list" (schema 5), "label": the kit\'s own name for the rule, on '
              'a kit_review finding (schema 6), "verdicts": the fix-checker verdicts in '
@@ -283,10 +293,16 @@ SKILL_PHASES = {'brainstorming': 'design', 'writing-plans': 'plan_writing',
                 'subagent-driven-development': 'coordination', 'executing-plans': 'implement',
                 'test-driven-development': 'implement'}
 PATH_PHASES = {'plan': 'design', 'full': 'coordination', 'small': 'implement'}
+# A subagent's phase by its agent, for an agent that is no record step.
+AGENT_PHASES = {'plan-writer': 'plan_writing'}
 
 STOP_SHARE = 25.0
 TRIAL_RUNS = 5
 TRIAL_WEEKS = 3
+# The plan pairs measure, its early-stop checkpoint and its end, as ~/.claude/docs/plan-pairs.md says.
+PLAN_PAIRS = 10
+PLAN_PAIRS_STOP = 6
+PLAN_PAIRS_END = '2026-12-20'
 # The workflow's major changes (the UTC install day, title, PR ref naming the repo), oldest first, exported whole as
 # --json's "changes": a merge that changes what a session or agent must do, or starts a measure the charts show, adds
 # its row in the PR, its day set in the change that merges with it; a change to what a report or record carries is
@@ -309,7 +325,8 @@ CHANGES = (('2026-11-09', 'Parallel waves', 'claude-workflow#3'),
            ('2026-11-17', 'Sessions offer to archive themselves once their work is done', 'claude-workflow#50'),
            ('2026-11-17', 'Fable stages by pace; the all-model limit gets the same pace rule', 'claude-workflow#57'),
            ('2026-11-17', 'Goals and one change per session', 'claude-workflow#58'),
-           ('2026-11-21', 'Sessions offer a kit that fits, in any project; the startup hook lists the kits', 'claude-workflow#61'))
+           ('2026-11-21', 'Sessions offer a kit that fits, in any project; the startup hook lists the kits', 'claude-workflow#61'),
+           ('2026-11-22', 'Plan pairs: plan writing at medium and xhigh on the same spec', 'claude-workflow#62'))
 CHANGE_DAYS = {ref: day for day, _, ref in CHANGES}
 # Seats that moved, by agent: (the last UTC day of the old pin, its model, its effort). A dispatch on or before that
 # day passes on the old pin too, since the check reads today's pins. A row is never removed.
@@ -323,7 +340,7 @@ CAP_OFFER_FROM = CHANGE_DAYS['claude-workflow#34']
 STAGES_BY_PACE_FROM = CHANGE_DAYS['claude-workflow#57']
 FIX_WINDOW_DAYS = 14
 NEVER_CONSULT = ('task-reviewer', 'final-reviewer', 'plan-reviewer', 'plan-simplifier', 'fix-checker', 'sweeper',
-                 'kit-reviewer')
+                 'kit-reviewer', 'plan-writer')
 FINDINGS = ('critical', 'important', 'minor', 'unneeded')
 KIT_FINDINGS = FINDINGS[:3]  # kit-reviewer has no unneeded count
 VERDICTS = ('fixed', 'not_proportionate', 'open')
@@ -1260,9 +1277,21 @@ def read_steps(rec):
                       'round': field(step, 'round', int, None), 'agent': field(step, 'agent', str, None),
                       'model': field(step, 'model', str, None), 'effort': field(step, 'effort', str, None),
                       'agent_id': field(step, 'agent_id', str, None),
+                      'plan_effort': step.get('plan_effort') if step.get('plan_effort') in PLAN_LEVELS else None,
                       'counts': {k: num(v) for k, v in field(step, 'counts', dict, {}).items()},
                       'strengths': strengths, 'findings': findings})
     return steps
+
+
+def read_plan_pair(rec):
+    """The record's plan pair, cleaned for the checks: None when it isn't a dict; a built level or plan effort not in
+    PLAN_LEVELS reads as None, a plans that isn't a list as [] and a plan that isn't a dict is dropped."""
+    pair = field(rec, 'plan_pair', dict, None)
+    if pair is None:
+        return None
+    return {'built': pair.get('built') if pair.get('built') in PLAN_LEVELS else None,
+            'plans': [{'effort': p.get('effort') if p.get('effort') in PLAN_LEVELS else None}
+                      for p in field(pair, 'plans', list, []) if isinstance(p, dict)]}
 
 
 def read_waves(rec):
@@ -1342,6 +1371,7 @@ def read_runs(log, stats, backfill):
                 if key not in rec and key in line:
                     rec[key] = line[key]
         rec['steps'] = read_steps(rec)
+        rec['plan_pair'] = read_plan_pair(rec)
         rec['waves'] = read_waves(rec)
         rec['kits'] = read_kits(rec)
         rec['kit_checks'] = read_kit_checks(rec)
@@ -2200,8 +2230,11 @@ def main_ran_on(path, start, end):
 
 
 def missing_required(run, events):
-    """The skills REQUIRED_SKILLS asks of the run's path that no event loaded."""
+    """The skills REQUIRED_SKILLS asks of the run's path that no event loaded; a plan record with a plan pair needs no
+    writing-plans of its own, since its plan-writers load it."""
     loaded = {value for _, kind, value in events if kind == 'skill'}
+    if run.get('plan_pair') is not None:
+        loaded.add('writing-plans')
     return [skill for path, skill in REQUIRED_SKILLS if run.get('path') == path and skill not in loaded]
 
 
@@ -2396,8 +2429,9 @@ def check_steps(run, dispatches, events, pins):
                      for last, old_model, old_effort in PAST_PINS.get(agent, ()))
         if not (fits or old_ok):
             why = f', but stage {raw} moves it to opus' if moved else ''
+            pinned = f"{pin['model']}/{pin['effort']}" if pin['effort'] else pin['model']
             problems.append(problem('agent_off_pin', f"{agent} ran on {model}/{effort}, pinned "
-                                    f"{pin['model']}/{pin['effort']}{why}: {inp.get('description')}",
+                                    f"{pinned}{why}: {inp.get('description')}",
                                     step=step, agent=agent))
         problems += [problem('agent_skill_missing', f"{agent} ran without its skill {skill}: {inp.get('description')}",
                              step=step, skill=skill, agent=agent)
@@ -2762,6 +2796,21 @@ def missing_facts(run):
     return [problem('record_fact_missing', 'record lacks ' + ', '.join(names))] if names else []
 
 
+def plan_pair_problems(run):
+    """A schema 9 plan record's warning naming what its plan pair lacks: the built level, a plan per level, and the
+    plan_effort of each plan_simplify and plan_review step."""
+    if run['schema'] < 9 or field(run, 'path', str, None) != 'plan' or run['plan_pair'] is None:
+        return []
+    pair = run['plan_pair']
+    gaps = ['built level'] if pair['built'] is None else []
+    if sorted(p['effort'] or '' for p in pair['plans']) != sorted(PLAN_LEVELS):
+        gaps.append('a plan per level')
+    nth = [sum(s['step'] == step['step'] for s in run['steps'][:i + 1]) for i, step in enumerate(run['steps'])]
+    gaps += [f"plan_effort on {step['step']} step {nth[i]}" for i, step in enumerate(run['steps'])
+             if step['step'] in ('plan_simplify', 'plan_review') and step['plan_effort'] is None]
+    return [problem('plan_pair_incomplete', 'plan pair lacks ' + ', '.join(gaps))] if gaps else []
+
+
 def health(projects_root, runs, now, records, pins, spans):
     """Warnings for the problems the transcripts and git show in each run, for this week's sessions with no run
     record and for this week's plan reviews with no plan simplify, then the information lines, then each run's own
@@ -2774,6 +2823,7 @@ def health(projects_root, runs, now, records, pins, spans):
         span = span_of.get(id(r))
         problems = check_run(*span, r, pins) if span else [problem('no_transcript', 'no session transcript found')]
         problems += missing_facts(r)
+        problems += plan_pair_problems(r)
         finals = [d['report'] for d in span_dispatches(*span)
                   if d['report'] is not None and d['kind'] == 'final_review' and not d['pair']] if span else []
         git_problems, usable = check_git(r, finals[-1] if finals else '')
@@ -2833,6 +2883,14 @@ def trial(runs, now):
     weeks = max(weeks, 0)
     text = f'runs {trial_runs}/{TRIAL_RUNS}, weeks {weeks}/{TRIAL_WEEKS}'
     if trial_runs >= TRIAL_RUNS or weeks >= TRIAL_WEEKS:
+        text += ' CHECKPOINT'
+    return text
+
+
+def plan_pairs(runs, now):
+    n = sum(1 for r in runs if field(r, 'path', str, None) == 'plan' and r['plan_pair'] is not None)
+    text = f'paired plans {n}/{PLAN_PAIRS} by {PLAN_PAIRS_END}'
+    if n >= PLAN_PAIRS_STOP or now.date().isoformat() > PLAN_PAIRS_END:
         text += ' CHECKPOINT'
     return text
 
@@ -2951,7 +3009,7 @@ def brief_report(tr, runs, now, records, projects_root, pins, spans, stamp_path)
         last += '; ' + drift
     lines = ["Advisor share of this week's Fable use: " + share_text(tr.week_advisor.get(week, 0.0),
                                                                     tr.week_fable.get(week, 0.0)),
-             f'Trial: {trial(records, now)}', last]
+             f'Trial: {trial(records, now)}; {plan_pairs(records, now)}', last]
     return '\n'.join(lines)
 
 
@@ -3009,9 +3067,9 @@ def unit_phases(path, start, end, unit_path, run_ends=(), chained=True):
     The main session's phase changes at each of its own events in the window, and when chained over every transcript
     of path's chain_paths, each up to its cutoff (a session reads its own transcript only, unchained): a skill load
     named in SKILL_PHASES, a simplify call, which starts the simplify span, and a launched final review or a run
-    window's end, which ends it. A subagent transcript takes its dispatch's step kind, else implement for an
-    implementer, else the main session's phase at its launch; one that no dispatch in the window launched is
-    unattributed.
+    window's end, which ends it. A subagent transcript takes its dispatch's step kind, else its agent's phase in
+    AGENT_PHASES, else implement for an implementer, else the main session's phase at its launch; one that no
+    dispatch in the window launched is unattributed.
     """
     chain = chain_windows(path, end) if chained else [(path, end)]
     mains, launched, own = {p for p, _ in chain}, {}, []
@@ -3052,8 +3110,8 @@ def unit_phases(path, start, end, unit_path, run_ends=(), chained=True):
             for d in span_dispatches(path, start, end):
                 if d['sub']:
                     # Final reviews already have a kind, so is_workflow_agent picks out the implementers here.
-                    subs[d['sub']] = d['kind'] or ('implement' if is_workflow_agent(d['inp'])
-                                                   else main_phase(d['time']))
+                    subs[d['sub']] = (d['kind'] or AGENT_PHASES.get(d['inp'].get('subagent_type'))
+                                      or ('implement' if is_workflow_agent(d['inp']) else main_phase(d['time'])))
         return subs.get(transcript, 'unattributed')
     return phase_of
 

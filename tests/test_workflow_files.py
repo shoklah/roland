@@ -31,6 +31,7 @@ ROLES = {
     'final-reviewer': ('fable', 'high', REVIEWER_TOOLS, [GUIDELINES]),
     'sweeper': ('haiku', 'medium', REVIEWER_TOOLS, None),
     'kit-reviewer': ('opus', 'high', REVIEWER_TOOLS, None),
+    'plan-writer': ('fable', None, 'Agent', [GUIDELINES, 'writing-plans']),
 }
 
 
@@ -68,6 +69,8 @@ class AgentFiles(unittest.TestCase):
             with self.subTest(agent=name):
                 fields, body = frontmatter(read(os.path.join('agents', name + '.md')))
                 expected = {'name': name, 'model': model, 'effort': effort, 'disallowedTools': disallowed}
+                if effort is None:
+                    del expected['effort']
                 if skills is not None:
                     expected['skills'] = skills
                 description = fields.pop('description', '')
@@ -239,6 +242,29 @@ class AgentFiles(unittest.TestCase):
                      'Kit offer: <name> | <answer>', '"skill": "kit:<name>"', 'makes no offer', 'names no kit',
                      'the list names a refused kit'):
             self.assertIn(must, text)
+
+    def test_section_points_to_the_plan_pairs_rules(self):
+        text = read('claude-md/agentic-workflow.md')
+        for must in ('~/.claude/docs/plan-pairs.md', '`plan-writer`'):
+            self.assertIn(must, text)
+        self.assertNotIn('two plans', text)  # every subagent reads the section: no writer learns of the other plan
+        self.assertLessEqual(len(text.splitlines()), 30)
+
+    def test_plan_pairs_rules_hold_the_contract(self):
+        text = read('claude-md/plan-pairs.md')
+        for must in ('workflow-log.jsonl', '`plan_pair`', '`plan_effort`', '`not_built`', '`questions`',
+                     '`effort: medium`', '`effort: xhigh`', '`plan-writer`', 'NEEDS_CONTEXT', 'SendMessage',
+                     'simplify A, review A, simplify B, review B', '-plan-<level>.md', 'never chooses',
+                     'paired plans', 'CHECKPOINT', '2026-12-20', 'stays at `medium`', 'early stop'):
+            with self.subTest(must=must):
+                self.assertIn(must, text)
+
+    def test_plan_writer_writes_from_the_spec_alone_and_asks_on_gaps(self):
+        _, body = frontmatter(read('agents/plan-writer.md'))
+        for must in ('NEEDS_CONTEXT', '~/.claude/docs/kits.md', 'kit.py', 'no other plan', 'never consult the advisor',
+                     'not the brainstorm', 'plan-pairs.md', 'but your output path, and nothing under'):
+            with self.subTest(must=must):
+                self.assertIn(must, body)
 
     def test_plan_reviewer_checks_kit_tasks_both_ways(self):
         _, body = frontmatter(read('agents/plan-reviewer.md'))

@@ -501,23 +501,12 @@ class Report(unittest.TestCase):
         self.session([user('older typed'), user('This session is being continued', isCompactSummary=True)], sid='old')
         self.assertIn('main_calls=1 typed=2 ', section(self.run_report(), 'Questions:')[0])
 
-    def test_trial_progress_in_brief(self):
-        # 5 full runs with advisor true: 'runs 5/5' and 'CHECKPOINT'
+    def test_the_ended_trial_leaves_the_brief_and_stays_in_the_json(self):
+        # 5 full runs with advisor true: --brief no longer counts them; --json keeps the count, with no target
         self.records([run_record() for _ in range(5)] +
                      [run_record(path='small'), run_record(advisor=False)])
-        trial = self.run_report('--brief').splitlines()[1]
-        self.assertIn('runs 5/5, weeks 0/3', trial)
-        self.assertIn('CHECKPOINT', trial)
-
-    def test_trial_weeks_count_whole_weeks_since_first_advisor_run(self):
-        self.records([run_record(date='2026-10-30T12:00:00Z'), run_record(path='small', date='2026-10-24T12:00:00Z')])
-        trial = self.run_report('--brief').splitlines()[1]
-        self.assertIn('runs 1/5, weeks 2/3', trial)
-        self.assertNotIn('CHECKPOINT', trial)
-        self.records([run_record(advisor=True, path='small', date='2026-10-17T11:00:00Z')])
-        trial = self.run_report('--brief').splitlines()[1]
-        self.assertIn('runs 1/5, weeks 3/3', trial)
-        self.assertIn('CHECKPOINT', trial)
+        self.assertEqual(self.run_report('--brief').splitlines()[1], 'Trial: paired plans 0/10 by 2026-12-20')
+        self.assertEqual(self.json()['totals']['advisor']['trial'], 'runs 5')
 
     def test_since_drops_older_rows_and_runs(self):
         self.session([asst('m_old', iterations=[executor(), ADVISOR], ts='2026-10-01T10:00:00.000Z'),
@@ -552,6 +541,8 @@ class Report(unittest.TestCase):
         # ADDS_UP tallies a final review's findings by severity against its counts, "unneeded" included.
         self.assertIn('"severity": "critical"|"important"|"minor", or "unneeded" for', schema['steps'])
         self.assertIn('"plan"', schema['path'])
+        # verdicts_dont_add_up compares every finding's verdicts with the fix-check steps' counts.
+        self.assertIn("all findings' verdicts add up to the fix-check steps' counts", schema['steps'])
 
     def test_schema_1_and_2_records_and_a_plan_record_are_all_read(self):
         step = {'step': 'final_review', 'agent': 'final-reviewer', 'model': 'fable', 'effort': 'high',
@@ -562,7 +553,7 @@ class Report(unittest.TestCase):
         out = self.run_report()
         self.assertEqual(len([l for l in out.splitlines() if l.startswith('    2026-11-05')]), 3)
         self.assertIn('path=plan', out)
-        self.assertIn('runs 2/5', self.run_report('--brief'))  # the two Full runs count, the plan record doesn't
+        self.assertIn('Advisor trial: runs 2\n', out)  # the two Full runs count, the plan record doesn't
 
     def test_malformed_steps_are_dropped_not_fatal(self):
         steps = ['not a dict', {'step': 'nope'}, {'step': 'task_review', 'task': 1, 'round': 0,
@@ -748,7 +739,7 @@ class Report(unittest.TestCase):
             self.tearDown()
             self.setUp()  # a fresh log: records() appends
             self.records([dict(plan_record(branch=f'b{i}'), schema=9, plan_pair=pair) for i in range(n)] + list(full))
-            return self.run_report('--brief', *args).splitlines()[1].split('; ')[1]
+            return self.run_report('--brief', *args).splitlines()[1].removeprefix('Trial: ')
         self.assertEqual(pairs_part(0), 'paired plans 0/10 by 2026-12-20')
         for n, mark in ((5, False), (6, True), (7, True), (10, True), (11, True)):
             self.assertEqual(pairs_part(n).endswith(' CHECKPOINT'), mark, n)
@@ -939,7 +930,7 @@ class Report(unittest.TestCase):
         self.assertEqual(len(brief), 3)
         self.assertIn('0%', brief[0])
         self.assertNotIn('STOP', brief[0])
-        self.assertIn('runs 0/5, weeks 0/3', brief[1])
+        self.assertEqual(brief[1], 'Trial: paired plans 0/10 by 2026-12-20')
         self.assertIn('Consultations with no note: 0', brief[2])
 
     def test_simplify_spend_is_unknown_not_zero(self):
@@ -4035,7 +4026,6 @@ class HealthCheck(Report):
         self.assertIn('new-branch', self.run_report('--health', '--now', now))
         self.assertIn('old-branch', self.run_report('--health', '--now', now, '--since', '2026-10-01'))
         self.assertIn('old-branch', json.dumps(self.json('--now', now)))
-        self.assertIn('Trial: runs 2/5', self.run_report('--brief', '--now', now))  # the trial line still counts every record
 
     def test_json_weeks_rows(self):
         rows = [self.startup(), asst('big', u=usage(None, 1000000, 0), ts=self.ts()),
@@ -4158,7 +4148,7 @@ class HealthCheck(Report):
             'calls': 1, 'tokens': {'input': 3000000, 'output': 0, 'cache_read': 0, 'cache_write': 0}, 'cost': 30.0,
             'by_role': {'main': {'calls': 1, 'flagged': False}}, 'failed': {}, 'notes': 0, 'changed': 0, 'missing': 1,
             'weeks': [{'week': '2026-11-01', 'advisor': 30.0, 'fable': 70.0, 'share': 30.0, 'stop': True}],
-            'trial': 'runs 2/5, weeks 0/3'})
+            'trial': 'runs 2'})
         board = totals['scoreboard']
         self.assertEqual(board['advisor'], {'calls': 1, 'notes': 0, 'changed': 0, 'cost': 30.0, 'share': 30.0})
         self.assertEqual(board['dispatch_guard'], {'no_simplify': 1})

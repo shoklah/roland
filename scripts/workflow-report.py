@@ -19,10 +19,10 @@ Usage: workflow-report.py [--since YYYY-MM-DD] [--projects DIR] [--log FILE] [--
   --no-cache  read and write no cache; the output is the same
   --since     ignore transcript rows and run records before this date (UTC); --health and --brief default it to
               7 days before --now, --json and --html read everything
-  --brief     at most 3 lines: this week's advisor share of Fable use, the trial's progress and the paired plans'
-              count, then this week's first WARN line (the unpriced_model ones come last) with a count of the rest,
-              or else the consultations with no note, then any commits on main since the last template export; the
-              trial counts every run record
+  --brief     at most 3 lines: this week's advisor share of Fable use, the paired plans' count, then this week's
+              first WARN line (the unpriced_model ones come last) with a count of the rest, or else the
+              consultations with no note, then any commits on main since the last template export; the count reads
+              every run record
   --health    every WARN line for the runs since --since, from the run log, the runs' transcripts and git, for
               this week's sessions with no run record and no row in the last hour, for this week's plan reviews
               with no plan-simplifier since the previous plan review, for this week's typed triggers whose skill
@@ -246,8 +246,8 @@ SCHEMA = {
              '"reason" (required for declined and ruled), "closed_round": N, "category": an id from its step\'s '
              'area list in "category_list", the reviewer\'s, "validity": "valid"|"invalid"|"unclear", the '
              'session\'s, by the definitions in "category_list" (schema 5), "label": the kit\'s own name for the rule, on '
-             'a kit_review finding (schema 6), "verdicts": the fix-checker verdicts in '
-             'order}], '
+             'a kit_review finding (schema 6), "verdicts": the fix-checker verdicts on the finding in order, one '
+             'per fix-check that gave it one; all findings\' verdicts add up to the fix-check steps\' counts}], '
              '"strengths" (plan_simplify, plan_review, task_review and final_review; schema 5): [{"category", '
              '"summary"}], [] for none; "counts" never holds "strengths"}',
     'waves': 'list of {"wave": "A", "tasks": [N, ...], "conflicts": N}, one per wave in order; absent on a run with no '
@@ -297,8 +297,6 @@ PATH_PHASES = {'plan': 'design', 'full': 'coordination', 'small': 'implement'}
 AGENT_PHASES = {'plan-writer': 'plan_writing'}
 
 STOP_SHARE = 25.0
-TRIAL_RUNS = 5
-TRIAL_WEEKS = 3
 # The plan pairs measure, its early-stop checkpoint and its end, as ~/.claude/docs/plan-pairs.md says.
 PLAN_PAIRS = 10
 PLAN_PAIRS_STOP = 6
@@ -326,7 +324,9 @@ CHANGES = (('2026-11-09', 'Parallel waves', 'claude-workflow#3'),
            ('2026-11-17', 'Fable stages by pace; the all-model limit gets the same pace rule', 'claude-workflow#57'),
            ('2026-11-17', 'Goals and one change per session', 'claude-workflow#58'),
            ('2026-11-21', 'Sessions offer a kit that fits, in any project; the startup hook lists the kits', 'claude-workflow#61'),
-           ('2026-11-22', 'Plan pairs: plan writing at medium and xhigh on the same spec', 'claude-workflow#62'))
+           ('2026-11-22', 'Plan pairs: plan writing at medium and xhigh on the same spec', 'claude-workflow#62'),
+           ('2026-11-22', 'A fix-check verdict gets a ledger line per finding', 'claude-workflow#63'),
+           ('2026-11-22', 'Advisor trial ends', 'claude-workflow#65'))
 CHANGE_DAYS = {ref: day for day, _, ref in CHANGES}
 # Seats that moved, by agent: (the last UTC day of the old pin, its model, its effort). A dispatch on or before that
 # day passes on the old pin too, since the check reads today's pins. A row is never removed.
@@ -2876,15 +2876,9 @@ def share_text(advisor, fable):
     return text + (' STOP' if pct > STOP_SHARE else '')
 
 
-def trial(runs, now):
-    trial_runs = sum(1 for r in runs if r.get('path') == 'full' and r['advisor'])
-    starts = [r['_time'] for r in runs if r['advisor'] and r['_time'] is not None]
-    weeks = int((now - min(starts)).total_seconds() // (7 * 86400)) if starts else 0
-    weeks = max(weeks, 0)
-    text = f'runs {trial_runs}/{TRIAL_RUNS}, weeks {weeks}/{TRIAL_WEEKS}'
-    if trial_runs >= TRIAL_RUNS or weeks >= TRIAL_WEEKS:
-        text += ' CHECKPOINT'
-    return text
+def trial(runs):
+    """The ended advisor trial's count: its Full runs with the advisor on."""
+    return f"runs {sum(1 for r in runs if r.get('path') == 'full' and r['advisor'])}"
 
 
 def plan_pairs(runs, now):
@@ -2927,7 +2921,7 @@ def rate(count, calls):
     return f'{count * 1000.0 / calls:.1f}' if calls else '0.0'
 
 
-def advisor_facts(adv, notes, runs, now):
+def advisor_facts(adv, notes, runs):
     """Everything the full report says about the advisor, as data, from unit_advisor's facts adv and the notes counts
     {'notes', 'changed', 'missing'}."""
     weeks = []
@@ -2936,12 +2930,12 @@ def advisor_facts(adv, notes, runs, now):
         weeks.append(dict(w, share=share, stop=share > STOP_SHARE))
     return {'calls': adv['calls'], 'tokens': adv['tokens'], 'cost': adv['cost'], 'by_role': adv['by_role'],
             'failed': adv['failed'], 'notes': notes['notes'], 'changed': notes['changed'], 'missing': notes['missing'],
-            'weeks': weeks, 'trial': trial(runs, now)}
+            'weeks': weeks, 'trial': trial(runs)}
 
 
 def full_report(tr, runs, stats, since, now, projects_root):
     out = [f"Workflow report{' since ' + since.date().isoformat() if since else ''}"]
-    advisor = advisor_facts(unit_advisor(tr), unit_notes(tr), runs, now)
+    advisor = advisor_facts(unit_advisor(tr), unit_notes(tr), runs)
     tk = advisor['tokens']
     out.append(f"Advisor calls: calls={advisor['calls']} input={tk['input']} output={tk['output']} "
                f"cache_read={tk['cache_read']} cache_write={tk['cache_write']} cost=${advisor['cost']:.2f}")
@@ -2953,7 +2947,7 @@ def full_report(tr, runs, stats, since, now, projects_root):
     out.append('Weeks from Sunday 07:00 UTC, advisor share of Fable use:')
     for week in advisor['weeks']:
         out.append(f"  {week['week']}: " + share_text(week['advisor'], week['fable']))
-    out.append(f"Trial: {advisor['trial']}")
+    out.append(f"Advisor trial: {advisor['trial']}")
     out.append('Runs, advisor on and off:')
     for name, flag in (('advisor=on', True), ('advisor=off', False)):
         group = [r for r in runs if r['advisor'] == flag]
@@ -3009,7 +3003,7 @@ def brief_report(tr, runs, now, records, projects_root, pins, spans, stamp_path)
         last += '; ' + drift
     lines = ["Advisor share of this week's Fable use: " + share_text(tr.week_advisor.get(week, 0.0),
                                                                     tr.week_fable.get(week, 0.0)),
-             f'Trial: {trial(records, now)}; {plan_pairs(records, now)}', last]
+             f'Trial: {plan_pairs(records, now)}', last]
     return '\n'.join(lines)
 
 
@@ -3695,7 +3689,7 @@ def report_data(projects_root, records, runs, spans, pins, now, since):
     warns = warns + unpriced_warnings(seen.unpriced)
     advisor = advisor_facts(sum_advisor(u['advisor'] for u in units if u['advisor'] is not None),
                             {k: sum(u['notes'][k] for u in units if u['notes'] is not None)
-                             for k in ('notes', 'changed', 'missing')}, runs, now)
+                             for k in ('notes', 'changed', 'missing')}, runs)
     return {
         'version': JSON_VERSION,
         'generated': datetime.datetime.now(datetime.timezone.utc).isoformat(),

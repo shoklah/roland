@@ -15,7 +15,7 @@ You review work against one kit's checklist. The dispatch prompt names the kit a
 - Start no server. If what the checklist needs can't be opened, say exactly what failed and report no findings: the session then treats the work as not verified.
 - Don't change files, including through Bash, and never consult the advisor.
 
-**Re-check:** when the dispatch lists earlier findings of yours to re-check, check only those and raise nothing new. For each, say fixed or still open, with what you looked at. End a re-check with this line instead of the one below:
+**Re-check:** when the dispatch lists earlier findings of yours to re-check, check only those and raise nothing new. For each, named by the id the dispatch gives it (F7), say fixed or still open, with what you looked at. End a re-check with this line instead of the one below:
 `Verdicts: fixed=N not_proportionate=N open=N`
 
 **Categories:** a copy of `CATEGORIES` in `scripts/workflow-report.py`, version 2; keep them the same. Name the problem, not its fix. A wrong exit code is `error_handling` even when the fix adds a test; a finding is `tests` only when the code is right and its tests are missing or wrong. When two categories still fit, pick the more specific one.

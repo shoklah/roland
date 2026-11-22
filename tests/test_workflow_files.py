@@ -133,11 +133,11 @@ class AgentFiles(unittest.TestCase):
         text = read('claude-md/agentic-workflow.md')
         self.assertLessEqual(len(text.splitlines()), 30)  # About 25 lines.
         for must in ('failing-test-check.py', 'workflow-log.jsonl', 'workflow-report.py --brief',
-                     'workflow-report.py --schema', 'Advisor: ', '**Failing-test check:** exempt:',
-                     '/advisor fable', '/advisor off', 'workflow-archive', 'Started:', '"plan"', 'F1',
+                     'workflow-report.py --schema', '**Advisor:** off in every stage', '**Failing-test check:** exempt:',
+                     'workflow-archive', 'Started:', '"plan"', 'F1',
                      '**Wave:**', '/usr/bin/python3 -I ~/.claude/scripts/wave.py', '**Offers:**', 'grill-me',
                      'offers', 'agent_id', 'validity', 'S1', 'category_list', 'severity `unneeded`',
-                     'fix: address review findings'):
+                     'fix: address review findings', '`F7 verdict: fixed`'):
             with self.subTest(must=must):
                 self.assertIn(must, text)
 
@@ -193,6 +193,13 @@ class AgentFiles(unittest.TestCase):
         _, body = frontmatter(read('agents/fix-checker.md'))
         for must in ('fixed, not proportionate', "Don't review anything else", 'parallel', 'only the tests'):
             self.assertIn(must, body)
+
+    def test_re_checks_name_each_verdict_by_the_findings_id(self):
+        # The session keys each verdict line in the ledger to the finding's number.
+        for name in ('fix-checker', 'kit-reviewer'):
+            with self.subTest(agent=name):
+                _, body = frontmatter(read(os.path.join('agents', name + '.md')))
+                self.assertIn('by the id the dispatch gives it', body)
 
     def test_plan_simplifier_checks_the_four_angles_without_cutting_requirements(self):
         _, body = frontmatter(read('agents/plan-simplifier.md'))

@@ -77,3 +77,4 @@
 - A rule set read on demand lives in `claude-md/`, installs to `~/.claude/docs/` and is reached by one pointer sentence in the section, which stays within its line cap.
 - A plan record whose cleaned `plan_pair` is not None needs no `writing-plans` load of its own in `missing_required`, since its `plan-writer`s load it under their pin; every other `REQUIRED_SKILLS` entry still applies.
 - The paired-plans count shows only on `--brief`'s `Trial:` line, through `plan_pairs` in `brief_report`, and never enters `trial()`, `--json` or the page.
+- The suite passes with an empty `HOME` and no global git identity: a test that makes a repo sets its own `user.name` and `user.email`, and a test that reads the real `~/.claude` skips under `CI`.

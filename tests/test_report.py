@@ -30,6 +30,7 @@ PAIRS_FROM = '2026-11-11'
 # CAP_OFFER_FROM in scripts/workflow-report.py, the day the context cap hook was installed: keep them the same.
 CAP_OFFER_FROM = '2026-11-12'
 STAGES_BY_PACE_FROM = '2026-11-17'  # CHANGE_DAYS['claude-workflow#57'] in scripts/workflow-report.py: keep them the same.
+PLAN_EFFORT_FROM = '2026-11-23'  # CHANGE_DAYS['claude-workflow#67'] in scripts/workflow-report.py: keep them the same.
 
 
 # Copied from scripts/workflow-report.py's unit_key, since tests can't import the script: keep them the same.
@@ -3286,18 +3287,20 @@ class HealthCheck(Report):
                           if w['kind'] == 'unpriced_model'], [(None, None)] * 2)
         self.assertIn('has no price in PRICES', self.run_report('--brief').splitlines()[-1])
 
-    def test_the_stages_by_pace_day_is_its_changes_row(self):
-        rows = [r for r in self.json()['changes'] if r['ref'] == 'claude-workflow#57']
-        self.assertEqual([r['date'] for r in rows], [STAGES_BY_PACE_FROM])
+    def test_each_stage_table_day_is_its_changes_row(self):
+        changes = self.json()['changes']
+        for ref, day in (('claude-workflow#57', STAGES_BY_PACE_FROM), ('claude-workflow#67', PLAN_EFFORT_FROM)):
+            with self.subTest(ref=ref):
+                self.assertEqual([r['date'] for r in changes if r['ref'] == ref], [day])
 
-    def staged_run(self, started, path, stage, model, branch='b'):
+    def staged_run(self, started, path, stage, model, branch='b', effort=None):
         """A run record of path and stage started at started (YYYY-MM-DDTHH:MM:SSZ) and dated the day after, whose
-        main session runs on model in its window."""
+        main session runs on model, at effort when given, in its window."""
         self.day = started[:10]
         self.clock = 0
         date = (datetime.date.fromisoformat(self.day) + datetime.timedelta(days=1)).isoformat() + 'T12:00:00Z'
         head = f'{branch}{stage}'.encode().hex()[:8]
-        self.session([self.startup(), asst('m-' + head, model=model, ts=self.ts()),
+        self.session([self.startup(), asst('m-' + head, model=model, ts=self.ts(), effort=effort),
                       self.record_write(head, started=started, date=date)], project='proj', sid=branch)
         fields = dict(stage=stage, started=started, date=date, branch=branch, head=head)
         rec = plan_record(**fields) if path == 'plan' else run_record(path=path, **fields)
@@ -3353,6 +3356,40 @@ class HealthCheck(Report):
                 self.records([rec])
                 data = self.json('--now', '2026-11-22T00:00:00Z')
                 self.assertEqual(data['totals']['models']['main']['plan']['differs'], differs)
+
+    def test_a_plan_session_differs_on_effort_only_after_the_effort_day(self):
+        day = datetime.date.fromisoformat(PLAN_EFFORT_FROM)
+        before, after = ((day + datetime.timedelta(days=n)).isoformat() + 'T10:00:00Z' for n in (-1, 1))
+        on = PLAN_EFFORT_FROM + 'T10:00:00Z'
+        # (started, stage, main model, main effort, what it adds to plan's differs)
+        cases = ((after, '1', 'claude-fable-5-2', 'xhigh', 1), (after, '1', 'claude-fable-5-2', 'medium', 0),
+                 (after, '1', 'claude-fable-5-2', None, 0),     # an effort the transcript does not show never differs
+                 (after, '2', 'claude-opus-5-5', 'xhigh', 1),
+                 (on, '1', 'claude-fable-5-2', 'xhigh', 0),     # the install day: the table before named no effort
+                 (before, '1', 'claude-fable-5-2', 'xhigh', 0))
+        for started, stage, model, effort, differs in cases:
+            with self.subTest(started=started, stage=stage, effort=effort):
+                self.tearDown()
+                self.setUp()
+                rec, _ = self.staged_run(started, 'plan', stage, model, effort=effort)
+                self.records([rec])
+                data = self.json('--now', (day + datetime.timedelta(days=5)).isoformat() + 'T00:00:00Z')
+                self.assertEqual(data['totals']['models']['main']['plan']['differs'], differs)
+
+    def test_a_plan_run_with_no_day_does_not_differ_on_effort_alone(self):
+        # Built by hand, not with staged_run: the record has no started and an unreadable date, so only its head,
+        # in the write row's command, ties it to its session.
+        self.day = '2026-11-25'
+        self.clock = 0
+        head = 'abcd0067'
+        self.session([self.startup(), asst('m-' + head, model='claude-fable-5-2', ts=self.ts(), effort='xhigh'),
+                      self.record_write(head)], project='proj')
+        rec = {k: v for k, v in plan_record(stage='1').items() if k != 'started'}
+        self.records([dict(rec, date='not a date', head=head)])
+        data = self.json('--now', '2026-11-28T00:00:00Z')
+        self.assertIsNotNone(data['runs'][0]['window'])   # tied: an untied run is skipped and proves nothing
+        self.assertEqual(data['totals']['models']['main']['plan']['actual'], {'claude-fable-5-2/xhigh': 1})
+        self.assertEqual(data['totals']['models']['main']['plan']['differs'], 0)
 
     def test_json_phase_costs_split_by_kind_and_cache_lifetime(self):
         u = {'input_tokens': 1000000, 'output_tokens': 1000000, 'cache_read_input_tokens': 1000000,

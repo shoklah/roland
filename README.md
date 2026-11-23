@@ -126,7 +126,7 @@ A kit specializes the workflow for one topic, only on the tasks it fits: it adds
 
 | Role | Agent | Model | Effort |
 |---|---|---|---|
-| Design and plan | main session | Fable | `high`, `xhigh` for the hardest architecture |
+| Design and plan | main session | Fable | `medium` |
 | Plan simplify | `plan-simplifier` | Opus 5.5 | `high` |
 | Plan review | `plan-reviewer` | Fable | `high` |
 | Plan pairs (while the measure runs) | `plan-writer` | the design-and-plan model of the stage | `medium` and `xhigh`, one each |
@@ -147,10 +147,10 @@ At task start Claude reads `get_usage`, works out the hours gone (`168 - hours_t
 
 | Stage | Trigger | Other main sessions | Design and plan | Plan review | Final review | Advisor |
 |---|---|---|---|---|---|---|
-| 1 | None of the below | Owner's choice, Fable allowed | Fable | Fable | Fable; `xhigh` in risk areas | Off |
-| 2 | Projected Fable ≥ 100%, and either 24 hours gone or Fable ≥ 25% | Opus 5.5 | Opus 5.5 | Opus 5.5 | Opus 5.5; Fable at `xhigh` in risk areas | Off |
-| 3 | Fable ≥ 90% | Opus 5.5 | Opus 5.5 | Opus 5.5 | Opus 5.5 at `xhigh` | Off |
-| Out | Fable unavailable | Opus 5.5 | Opus 5.5 | Opus 5.5 | Opus 5.5 at `xhigh` | Off |
+| 1 | None of the below | Owner's choice, Fable allowed | Fable at `medium` | Fable | Fable; `xhigh` in risk areas | Off |
+| 2 | Projected Fable ≥ 100%, and either 24 hours gone or Fable ≥ 25% | Opus 5.5 | Opus 5.5 at `medium` | Opus 5.5 | Opus 5.5; Fable at `xhigh` in risk areas | Off |
+| 3 | Fable ≥ 90% | Opus 5.5 | Opus 5.5 at `medium` | Opus 5.5 | Opus 5.5 at `xhigh` | Off |
+| Out | Fable unavailable | Opus 5.5 | Opus 5.5 at `medium` | Opus 5.5 | Opus 5.5 at `xhigh` | Off |
 
 Claude matches its own session's model and effort to the cell for its path, in both directions, with `set_session_model` and `set_session_effort`. Stage 1 Small path work is the owner's choice and gets no switch, and an override the owner gives in words holds for the task. The session running implementation stays on Opus 5.5 at `medium` in every stage.
 

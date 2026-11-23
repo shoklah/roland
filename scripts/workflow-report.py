@@ -326,7 +326,8 @@ CHANGES = (('2026-11-09', 'Parallel waves', 'claude-workflow#3'),
            ('2026-11-21', 'Sessions offer a kit that fits, in any project; the startup hook lists the kits', 'claude-workflow#61'),
            ('2026-11-22', 'Plan pairs: plan writing at medium and xhigh on the same spec', 'claude-workflow#62'),
            ('2026-11-22', 'A fix-check verdict gets a ledger line per finding', 'claude-workflow#63'),
-           ('2026-11-22', 'Advisor trial ends', 'claude-workflow#65'))
+           ('2026-11-22', 'Advisor trial ends', 'claude-workflow#65'),
+           ('2026-11-23', 'Lean handoff; design and plan seats at medium effort', 'claude-workflow#67'))
 CHANGE_DAYS = {ref: day for day, _, ref in CHANGES}
 # Seats that moved, by agent: (the last UTC day of the old pin, its model, its effort). A dispatch on or before that
 # day passes on the old pin too, since the check reads today's pins. A row is never removed.
@@ -338,6 +339,8 @@ PAST_PINS = {'final-reviewer': [(CHANGE_DAYS['claude-workflow#22'], 'fable', 'hi
 CAP_OFFER_FROM = CHANGE_DAYS['claude-workflow#34']
 # STAGES_BY_PACE_FROM, the day the stages by pace were installed, is copied in tests/test_report.py: keep them the same.
 STAGES_BY_PACE_FROM = CHANGE_DAYS['claude-workflow#57']
+# PLAN_EFFORT_FROM, the day the plan seat gained its effort, is copied in tests/test_report.py: keep them the same.
+PLAN_EFFORT_FROM = CHANGE_DAYS['claude-workflow#67']
 FIX_WINDOW_DAYS = 14
 NEVER_CONSULT = ('task-reviewer', 'final-reviewer', 'plan-reviewer', 'plan-simplifier', 'fix-checker', 'sweeper',
                  'kit-reviewer', 'plan-writer')
@@ -502,14 +505,20 @@ REQUIRED_SKILLS = (('plan', 'brainstorming'), ('plan', 'writing-plans'), ('full'
 SKILL_OUTCOMES = {'brainstorming': 'spec', 'writing-plans': 'plan', 'simplify': 'simplify',
                   'test-driven-development': 'failing_test', 'subagent-driven-development': 'record'}
 # The stage table's model and effort for a run's main session, by the record's path and stage; None is the owner's
-# choice. PAST_RECOMMENDED is the table before STAGES_BY_PACE_FROM, and stage_tables says which a run's day reads. A
+# choice. PAST_RECOMMENDED is the table before STAGES_BY_PACE_FROM, PACE_RECOMMENDED the table from it until
+# PLAN_EFFORT_FROM, when the plan seat gained its effort, and stage_tables says which a run's day reads. A
 # difference is counted; from the install day, a main session on Fable where its stage calls for Opus is warned.
 PAST_RECOMMENDED = {'full': dict.fromkeys(('1', '2', '3', 'out'), 'opus/medium'),
                     'plan': {'1': 'fable', '2': 'fable', '3': 'opus', 'out': 'opus'},
                     'small': {'1': None, '2': 'opus', '3': 'opus', 'out': 'opus'}}
+PACE_RECOMMENDED = {'full': dict.fromkeys(('1', '2', '3', 'out'), 'opus/medium'),
+                    'plan': {'1': 'fable', '2': 'opus', '3': 'opus', 'out': 'opus'},
+                    'small': {'1': None, '2': 'opus', '3': 'opus', 'out': 'opus'}}
 RECOMMENDED = {'full': dict.fromkeys(('1', '2', '3', 'out'), 'opus/medium'),
-               'plan': {'1': 'fable', '2': 'opus', '3': 'opus', 'out': 'opus'},
+               'plan': {'1': 'fable/medium', '2': 'opus/medium', '3': 'opus/medium', 'out': 'opus/medium'},
                'small': {'1': None, '2': 'opus', '3': 'opus', 'out': 'opus'}}
+# Each stage table with its install day, oldest first; the first has none.
+STAGE_TABLES = ((None, PAST_RECOMMENDED), (STAGES_BY_PACE_FROM, PACE_RECOMMENDED), (PLAN_EFFORT_FROM, RECOMMENDED))
 JSON_VERSION = 1
 CACHE_VERSION = 14
 STATE_VERSION = 1
@@ -2211,11 +2220,13 @@ def stage_day(run):
 
 
 def stage_tables(day):
-    """The stage tables a run read on day, an ISO day or None: the old one before STAGES_BY_PACE_FROM, either on
-    that day or for None, and today's after it."""
-    if day is None or day == STAGES_BY_PACE_FROM:
-        return (PAST_RECOMMENDED, RECOMMENDED)
-    return (PAST_RECOMMENDED,) if day < STAGES_BY_PACE_FROM else (RECOMMENDED,)
+    """The stage tables a run read on day, an ISO day or None: the last of STAGE_TABLES installed by day, with the one
+    before it on its install day, and every table for None."""
+    if day is None:
+        return tuple(table for _, table in STAGE_TABLES)
+    tables = [table for since, table in STAGE_TABLES if since is None or since <= day]
+    since = STAGE_TABLES[len(tables) - 1][0]   # the install day of the last table reached
+    return tuple(tables[-2:]) if since == day else (tables[-1],)
 
 
 def main_ran_on(path, start, end):
@@ -2395,7 +2406,7 @@ def check_steps(run, dispatches, events, pins):
     # stage that means the same (its 2 as the old 3, its 3 as Out), on that day as either, and before it as recorded.
     raw = field(run, 'stage', str, None)
     tables = stage_tables(stage_day(run))
-    after = tables == (RECOMMENDED,)
+    after = not any(table is PAST_RECOMMENDED for table in tables)
     mapped = {'2': '3', '3': 'out'}.get(raw, raw)
     stages = tuple(raw if table is PAST_RECOMMENDED else mapped for table in tables)
     run_day = run['_time'].date().isoformat() if run['_time'] is not None else None

@@ -137,7 +137,15 @@ class AgentFiles(unittest.TestCase):
                      'workflow-archive', 'Started:', '"plan"', 'F1',
                      '**Wave:**', '/usr/bin/python3 -I ~/.claude/scripts/wave.py', '**Offers:**', 'grill-me',
                      'offers', 'agent_id', 'validity', 'S1', 'category_list', 'severity `unneeded`',
-                     'fix: address review findings', '`F7 verdict: fixed`'):
+                     'fix: address review findings', '`F7 verdict: fixed`',
+                     'State at handoff <n>:', 'Read only this:', 'Beyond list: ', 'Fable at `medium`'):
+            with self.subTest(must=must):
+                self.assertIn(must, text)
+
+    def test_the_readme_names_the_design_and_plan_effort(self):
+        text = read('README.md')
+        for must in ('| Design and plan | main session | Fable | `medium` |', '| Fable at `medium` |',
+                     '| Opus 5.5 at `medium` |'):
             with self.subTest(must=must):
                 self.assertIn(must, text)
 

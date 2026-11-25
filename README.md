@@ -228,6 +228,7 @@ A skill or command the owner triggers is offered at a fixed moment, or never. Th
 | `handoff` | At the cap, at a stopping point, drafted so a yes costs only the switch. After a skip, it comes back once context has grown a further 50K. |
 | Archiving the session | Last, once nothing the owner asked of the session is left open. Never at a handoff, since the successor shares the worktree: the last session of the chain makes the offer and names the earlier ones, left for the owner to archive. An app action, not a skill: on yes the session archives itself. |
 | A kit | On a Small or Full request that fits a kit the startup hook lists and the project neither names nor declines. Three answers, not yes/skip: `Use it`, `Not now` and `Never here`, as `claude-md/kits.md` says under **Suggest**. |
+| `session-cleanup` | Never offered: the owner runs `/session-cleanup` when the sidebar holds too many sessions. It archives only what they approve from its list. |
 | `workflow-dashboard` | Never offered: the owner runs `/workflow-dashboard` when they want the page, and its link stays the same, so nothing is lost by waiting. |
 
 ## Layout
@@ -237,7 +238,8 @@ agents/          eleven custom agents
 claude-md/       the CLAUDE.md section; kits.md: the kit rules, read on demand; plan-pairs.md: the plan pairs rules, read on demand
 hooks/           dispatch hook, startup hook, commit guard, context cap hook
 scripts/         failing-test check, workflow report, wave.py, kit.py
-skills/          workflow-dashboard: the /workflow-dashboard command
+skills/          session-cleanup: the /session-cleanup command;
+                 workflow-dashboard: the /workflow-dashboard command
 tools/           replay_dispatches.py: replays past dispatches through the dispatch hook
 tests/           unittest suites, run as subprocesses against temp folders;
                  kits/: a stand-in kit for kit.py's tests

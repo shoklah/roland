@@ -22,7 +22,7 @@ AGENTS = ['final-reviewer.md', 'fix-checker.md', 'implementer-copy.md', 'impleme
           'implementer.md', 'kit-reviewer.md', 'plan-reviewer.md', 'plan-simplifier.md', 'plan-writer.md', 'sweeper.md',
           'task-reviewer.md']
 SCRIPTS = ['failing-test-check.py', 'kit.py', 'wave.py', 'workflow-report.py']
-SKILLS = ['workflow-dashboard']
+SKILLS = ['session-cleanup', 'workflow-dashboard']
 HOOK_FILES = ['guard-agent-dispatch.py', 'guard-main-commit.py', 'remind-context-cap.py',
               'session-start-superpowers.sh']
 HOOK_TESTS = ['settings-snippet.json', 'test_dispatch.py', 'test_hooks.py']
